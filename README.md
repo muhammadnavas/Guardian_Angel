@@ -120,6 +120,11 @@ The image detection module includes comprehensive evaluation tools:
 
 Guardian Angel is designed to protect vulnerable populations from sophisticated scam attempts. Contributions that improve detection accuracy, enhance user experience, or expand language support are welcome.
 
+## 👥 Collaborators
+
+- **[muhammadnavas](https://github.com/muhammadnavas)**
+- **[abdulreha](https://github.com/abdulreha)**
+
 ---
 
 🔒 **Guardian Angel** — Protecting Senior Citizens from Digital Fraud
