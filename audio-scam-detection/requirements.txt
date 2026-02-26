@@ -9,6 +9,3 @@ openai-whisper
 librosa
 soundfile
 requests>=2.31.0
-
-# Email dependencies (Python fallback)
-secure-smtplib>=0.1.1

@@ -9,9 +9,7 @@ import re
 import gradio as gr
 
 from agents_audio import GuardianAngelTeam
-from agents_screenshot import ScreenshotTeam
 from dotenv import load_dotenv, find_dotenv
-from PIL import Image as PILImage
 
 load_dotenv(find_dotenv(), override=True)
 
@@ -20,7 +18,6 @@ load_dotenv(find_dotenv(), override=True)
 # ---------------------------------------------------------------------------
 
 _team: GuardianAngelTeam | None = None
-_screenshot_team: ScreenshotTeam | None = None
 
 def get_team() -> GuardianAngelTeam:
     global _team
@@ -29,14 +26,6 @@ def get_team() -> GuardianAngelTeam:
         _team = GuardianAngelTeam()
         print("✅ Guardian Angel Team ready")
     return _team
-
-def get_screenshot_team() -> ScreenshotTeam:
-    global _screenshot_team
-    if _screenshot_team is None:
-        print("🔄 Initializing Screenshot Team...")
-        _screenshot_team = ScreenshotTeam()
-        print("✅ Screenshot Team ready")
-    return _screenshot_team
 
 
 # ---------------------------------------------------------------------------
@@ -295,132 +284,6 @@ def format_pipeline_log(messages: list[str]) -> str:
         )
 
     return "".join(html_parts) if html_parts else "<div style='color:#374151;padding:20px;text-align:center'>⏳ Waiting for agents...</div>"
-
-
-# ---------------------------------------------------------------------------
-# Screenshot analysis function (7-agent Guardian Angel pipeline)
-# ---------------------------------------------------------------------------
-
-AGENT_COLORS_SCREENSHOT = {
-    "OCR_Specialist":           "#818cf8",
-    "Link_Checker":             "#38bdf8",
-    "Content_Analyst":          "#fb923c",
-    "Decision_Maker":           "#ef4444",
-    "Summary_Agent":            "#a3e635",
-    "Language_Translation_Agent": "#f472b6",
-    "DataStorage_Agent":        "#6b7280",
-}
-AGENT_ICONS_SCREENSHOT = {
-    "OCR_Specialist":           "🔍",
-    "Link_Checker":             "🔗",
-    "Content_Analyst":          "🕵️",
-    "Decision_Maker":           "⚖️",
-    "Summary_Agent":            "📋",
-    "Language_Translation_Agent": "🌐",
-    "DataStorage_Agent":        "💾",
-}
-
-async def analyze_screenshot(image_file, progress=gr.Progress()):
-    """7-agent screenshot scam detection pipeline."""
-    if not image_file:
-        yield (
-            "<div style='text-align:center;padding:30px;color:#ef4444;font-size:1.1rem'>❌ Please upload a screenshot first.</div>",
-            "<div style='color:#6b7280;padding:20px;text-align:center'>No image provided.</div>",
-        )
-        return
-
-    team = get_screenshot_team()
-    await team.reset()
-    progress(0.05, desc="🔄 Starting Screenshot Team...")
-
-    try:
-        pil_img = PILImage.open(image_file)
-        stream = await team.analyze(pil_img)
-    except Exception as e:
-        yield (
-            f"<div style='color:#ef4444;padding:20px'>❌ Failed to load image: {e}</div>",
-            "",
-        )
-        return
-
-    from autogen_agentchat.base import Response, TaskResult
-
-    agent_steps = {
-        "OCR_Specialist": 0.18,
-        "Link_Checker": 0.32,
-        "Content_Analyst": 0.48,
-        "Decision_Maker": 0.65,
-        "Summary_Agent": 0.78,
-        "Language_Translation_Agent": 0.88,
-        "DataStorage_Agent": 0.97,
-    }
-
-    html_parts = []
-    full_log = ""
-    final_summary = "Analysis complete."
-
-    def _render_pipeline():
-        if not html_parts:
-            return "<div style='color:#6b7280;padding:20px;text-align:center'>⏳ Waiting for agents...</div>"
-        return "".join(html_parts)
-
-    async for event in stream:
-        source = ""
-        content_str = ""
-
-        if isinstance(event, TaskResult):
-            for m in event.messages:
-                s = getattr(m, "source", "")
-                c = getattr(m, "content", "")
-                if c and isinstance(c, str):
-                    full_log += f"[{s}] {c}\n"
-            continue
-        elif isinstance(event, Response):
-            msg = event.chat_message
-            source = getattr(msg, "source", "")
-            c = getattr(msg, "content", "")
-            content_str = c if isinstance(c, str) else ""
-        elif hasattr(event, "source") and hasattr(event, "content"):
-            source = getattr(event, "source", "")
-            c = getattr(event, "content", "")
-            content_str = c if isinstance(c, str) else ""
-
-        if content_str and source:
-            full_log += f"[{source}] {content_str}\n"
-            color = AGENT_COLORS_SCREENSHOT.get(source, "#6b7280")
-            icon = AGENT_ICONS_SCREENSHOT.get(source, "🤖")
-            preview = content_str[:500] + ("..." if len(content_str) > 500 else "")
-            html_parts.append(
-                f"<div style='margin-bottom:12px;padding:12px 16px;border-left:4px solid {color};"
-                f"background:{color}12;border-radius:0 8px 8px 0'>"
-                f"<div style='color:{color};font-size:0.85rem;font-weight:700;margin-bottom:6px'>{icon} {source.replace('_', ' ')}</div>"
-                f"<div style='font-size:0.9rem;color:#1f2937;white-space:pre-wrap;line-height:1.5'>{preview}</div>"
-                f"</div>"
-            )
-            if source == "Summary_Agent":
-                final_summary = content_str
-            p = agent_steps.get(source, 0.9)
-            progress(p, desc=f"⚙️ {source.replace('_', ' ')} working...")
-            yield (
-                "<div style='color:#374151;padding:20px;text-align:center'>⏳ Agents working...</div>",
-                _render_pipeline(),
-            )
-
-    progress(1.0, desc="✅ Screenshot analysis complete")
-
-    # Build result card from Summary_Agent output
-    is_scam = any(w in final_summary.lower() for w in ["scam", "fraud", "phishing", "malicious", "suspicious", "danger"])
-    badge_color = "#ef4444" if is_scam else "#10b981"
-    badge_label = "⚠️ LIKELY SCAM" if is_scam else "✅ APPEARS SAFE"
-    result_html = (
-        f"<div style='background:#111827;border:2px solid {badge_color}40;border-radius:14px;padding:24px;font-family:Inter,sans-serif'>"
-        f"<div style='display:inline-block;background:{badge_color}20;color:{badge_color};font-size:1.3rem;"
-        f"font-weight:800;padding:10px 24px;border-radius:30px;border:2px solid {badge_color};margin-bottom:16px'>"
-        f"{badge_label}</div>"
-        f"<div style='color:#e5e7eb;font-size:1rem;line-height:1.7;white-space:pre-wrap'>{final_summary}</div>"
-        f"</div>"
-    )
-    yield (result_html, _render_pipeline())
 
 
 # ---------------------------------------------------------------------------
@@ -868,84 +731,6 @@ with gr.Blocks(title="Guardian Angel -- Scam Detector") as demo:
                 fn=analyze_call,
                 inputs=[audio_input, gr.State(None), transcript_input],
                 outputs=[call_result_output, call_pipeline_output],
-                show_progress="full",
-            )
-
-        # ══════════════════════════════════════════════════
-        # TAB 2 — Screenshot Scan
-        # ══════════════════════════════════════════════════
-        with gr.TabItem("📸 Screenshot Scan"):
-            gr.HTML("""
-                <div style='background:linear-gradient(135deg,#0f172a,#1e1b4b);border:1px solid #4f46e530;
-                            border-radius:12px;padding:18px 24px;margin-bottom:20px;margin-top:8px'>
-                    <div style='font-size:1.1rem;font-weight:700;color:#c4b5fd;margin-bottom:6px'>
-                        🖼️ How it works
-                    </div>
-                    <div style='color:#9ca3af;font-size:0.92rem;line-height:1.7'>
-                        Upload any suspicious screenshot — WhatsApp message, SMS, email, banking alert, or pop-up.
-                        <br>Gemini Vision will <strong style='color:#f9fafb'>extract all text</strong> from the image,
-                        then our <strong style='color:#c4b5fd'>7-agent pipeline</strong> — OCR · Link Checker · Content Analyst · Decision Maker · Summary · Translation · Storage — will <strong style='color:#f9fafb'>analyze it for scam patterns</strong>.
-                    </div>
-                </div>
-            """)
-
-            with gr.Row():
-                # ---- Left: Image upload ----
-                with gr.Column(scale=1):
-                    gr.HTML("""
-                        <div style='font-size:1.2rem;font-weight:700;color:#111827;margin-bottom:14px;
-                                    padding-bottom:8px;border-bottom:2px solid #d1d5db'>
-                            📤 Upload Screenshot
-                        </div>
-                    """)
-
-                    image_input = gr.Image(
-                        label="Drop a screenshot here or click to browse",
-                        type="filepath",
-                        sources=["upload", "clipboard"],
-                        elem_id="image-upload",
-                        height=320,
-                    )
-
-                    gr.HTML("""
-                        <div style='margin-top:10px;padding:12px 16px;background:#1f2937;border-radius:10px;
-                                    border:1px solid #374151;font-size:0.85rem;color:#9ca3af;line-height:1.6'>
-                            <strong style='color:#f9fafb'>Supported formats:</strong> PNG, JPG, JPEG, WEBP, GIF<br>
-                            <strong style='color:#f9fafb'>Works great with:</strong> WhatsApp 📱 · SMS · Email 📧 · Browser pop-ups · Banking alerts
-                        </div>
-                    """)
-
-                    img_analyze_btn = gr.Button("🔍 Scan Screenshot for Scams", variant="primary", size="lg", elem_id="analyze-btn")
-
-                # ---- Right: Pipeline ----
-                with gr.Column(scale=1):
-                    gr.HTML("""
-                        <div style='font-size:1.2rem;font-weight:700;color:#4f46e5;margin-bottom:14px;
-                                    padding-bottom:8px;border-bottom:2px solid #4f46e540'>
-                            🧠 Agent Pipeline
-                        </div>
-                    """)
-                    img_pipeline_output = gr.HTML(
-                        value="<div style='color:#374151;padding:40px;text-align:center;font-size:1rem'>"
-                              "🖼️ Upload a screenshot and click <strong>Scan Screenshot</strong> to start.</div>"
-                    )
-
-            gr.HTML("<div style='margin:20px 0;border-top:1px solid #d1d5db'></div>")
-            gr.HTML("""
-                <div style='font-size:1.2rem;font-weight:700;color:#111827;margin-bottom:12px;
-                            padding-bottom:8px;border-bottom:2px solid #d1d5db'>
-                    🎯 Scan Result
-                </div>
-            """)
-            img_result_output = gr.HTML(
-                value="<div style='color:#374151;padding:30px;text-align:center;font-size:1rem'>"
-                      "Results will appear here after scanning.</div>"
-            )
-
-            img_analyze_btn.click(
-                fn=analyze_screenshot,
-                inputs=[image_input],
-                outputs=[img_result_output, img_pipeline_output],
                 show_progress="full",
             )
 
