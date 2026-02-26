@@ -205,22 +205,56 @@ def format_pipeline_log(messages: list[str]) -> str:
     for msg in messages:
         color, icon = "#6b7280", "💬"
         agent_name = "System"
+        
+        # Detect agent from message
         for name, (c, i) in agent_styles.items():
             if name in msg:
                 color, icon = c, i
                 agent_name = name.replace("_", " ")
                 break
 
-        # Strip "GUARDIAN_ANGEL_COMPLETE" etc from display
-        display_msg = re.sub(r"(GUARDIAN_ANGEL_COMPLETE|SPEECH_DONE|REASONING_DONE|DECISION_DONE)", "", msg).strip()
+        # Clean up the message - remove technical prefixes and agent names
+        display_msg = msg
+        
+        # Remove agent name prefix like "[Speech_Agent]"
+        display_msg = re.sub(r"^\[.*?\]\s*", "", display_msg)
+        
+        # Remove technical keywords
+        cleanup_patterns = [
+            r"GUARDIAN_ANGEL_COMPLETE|SPEECH_DONE|REASONING_DONE|DECISION_DONE",
+            r"TRANSCRIPT_PROVIDED:\s*",
+            r"ANALYSIS_COMPLETE:\s*",
+            r"THREAT_ASSESSMENT:\s*",
+            r"FINAL_VERDICT:\s*",
+        ]
+        
+        for pattern in cleanup_patterns:
+            display_msg = re.sub(pattern, "", display_msg, flags=re.IGNORECASE)
+        
+        display_msg = display_msg.strip()
+        
+        # Skip empty messages
         if not display_msg:
             continue
+            
+        # Format based on agent type
+        if "Speech_Agent" in msg:
+            if "Good afternoon" in display_msg or "Hello" in display_msg:
+                display_msg = f"📝 Transcript processed:\n\n\"{display_msg[:300]}{'...' if len(display_msg) > 300 else ''}\""
+            else:
+                display_msg = f"🎙️ {display_msg}"
+        elif "Reasoning_Agent" in msg:
+            display_msg = f"🧠 Analyzing potential scam indicators...\n{display_msg[:400]}{'...' if len(display_msg) > 400 else ''}"
+        elif "Decision_Agent" in msg:
+            display_msg = f"⚖️ Making threat assessment...\n{display_msg[:400]}{'...' if len(display_msg) > 400 else ''}"
+        elif "Action_Agent" in msg:
+            display_msg = f"📡 Taking protective actions...\n{display_msg[:400]}{'...' if len(display_msg) > 400 else ''}"
 
         html_parts.append(
-            f"<div style='margin-bottom:12px;padding:10px 14px;border-left:3px solid {color};"
+            f"<div style='margin-bottom:12px;padding:12px 16px;border-left:4px solid {color};"
             f"background:{color}08;border-radius:0 8px 8px 0'>"
-            f"<div style='color:{color};font-size:0.8rem;font-weight:700;margin-bottom:4px'>{icon} {agent_name}</div>"
-            f"<div style='font-size:0.88rem;color:#d1d5db;white-space:pre-wrap;line-height:1.5'>{display_msg[:600]}</div>"
+            f"<div style='color:{color};font-size:0.85rem;font-weight:700;margin-bottom:6px'>{icon} {agent_name}</div>"
+            f"<div style='font-size:0.9rem;color:#e5e7eb;white-space:pre-wrap;line-height:1.5'>{display_msg}</div>"
             f"</div>"
         )
 
