@@ -15,14 +15,14 @@ import yaml
 
 from tools import ImageOCR, URLChecker, DatabaseConnector
 
-class MinervaTeam:
+class GuardianAngelTeam:
     """
-    Minerva Team tasked with Scam Protection using an Agentic Workflow
+    Guardian Angel Team tasked with Scam Protection using an Agentic Workflow
     """
 
     def __init__(self, config_path: str = "config/agents.yaml"):
         """
-        Initialize Minerva with agents and tools
+        Initialize Guardian Angel with agents and tools
         """
         self.load_environment()
         self.model = self.initialize_model()

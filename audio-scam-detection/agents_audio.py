@@ -18,7 +18,7 @@ from autogen_core.tools import FunctionTool
 from autogen_ext.models.openai import OpenAIChatCompletionClient
 from dotenv import load_dotenv, find_dotenv
 
-from tools import SpeechTranscriber, ScamDetector, AlertSystem, DatabaseConnector
+from tools import SpeechTranscriber, ScamDetector, AlertSystem, DatabaseConnector, ImageOCR
 
 
 load_dotenv(find_dotenv(), override=True)
@@ -32,6 +32,7 @@ _transcriber: Optional[SpeechTranscriber] = None
 _detector = ScamDetector()
 _alert = AlertSystem()
 _db = DatabaseConnector()
+_ocr = ImageOCR()
 
 
 def _get_transcriber() -> SpeechTranscriber:
@@ -46,6 +47,13 @@ def transcribe_audio(audio_path: str) -> str:
     Returns the transcript text or an error string.
     """
     return _get_transcriber().transcribe(audio_path)
+
+
+def extract_image_text(image_path: str) -> str:
+    """Extract text from a screenshot or image using OCR.
+    Returns the extracted text or an error string.
+    """
+    return _ocr.extract_text(image_path)
 
 
 def analyze_transcript(transcript: str) -> str:
@@ -126,7 +134,7 @@ class GuardianAngelTeam:
                 },
             )
         elif gemini_key:
-            print("🔄 Using Gemini 1.5 Flash model")
+            print("Using Gemini 2.0 Flash model")
             return OpenAIChatCompletionClient(
                 model="gemini-2.5-flash",
                 api_key=gemini_key,
@@ -145,6 +153,7 @@ class GuardianAngelTeam:
     def _build_team(self) -> RoundRobinGroupChat:
         # --- Tools ---
         transcribe_tool = FunctionTool(transcribe_audio, description="Transcribes an audio file (.wav/.mp3/.m4a) to text using Whisper. Pass the absolute file path.")
+        ocr_tool = FunctionTool(extract_image_text, description="Extracts text from a screenshot or image file (PNG/JPG/JPEG) using OCR. Pass the absolute file path.")
         analyze_tool = FunctionTool(analyze_transcript, description="Analyses a call transcript for fear/authority/urgency/financial scam indicators. Returns JSON with threat_score and indicator lists.")
         threat_level_tool = FunctionTool(get_threat_level, description="Converts a numeric threat_score (0–100) to SAFE, SUSPICIOUS, HIGH_RISK, or CRITICAL.")
         alert_tool = FunctionTool(trigger_alert, description="Sends alerts to family/police based on threat level. Pass threat_level and a short summary string.")
@@ -153,18 +162,18 @@ class GuardianAngelTeam:
         # --- Agent 1: Speech Agent ---
         speech_agent = AssistantAgent(
             name="Speech_Agent",
-            description="Transcribes audio call recordings to text",
-            system_message="""You are the Speech Agent. Your ONLY job is to transcribe the audio file provided.
+            description="Transcribes audio call recordings or extracts text from screenshots",
+            system_message="""You are the Speech Agent. Your ONLY job is to obtain the text content from the provided input.
 
 Instructions:
-1. Call the `transcribe_audio` tool with the provided audio file path.
-2. Report the full transcript text.
-3. If no audio path is provided and a transcript is already given, just say: "TRANSCRIPT_PROVIDED: <transcript>"
+1. If an AUDIO file path is provided: Call `transcribe_audio` with the audio file path and report the full transcript.
+2. If an IMAGE/SCREENSHOT file path is provided: Call `extract_image_text` with the image file path and report the extracted text.
+3. If a transcript is already given directly, say: "TRANSCRIPT_PROVIDED: <transcript>"
 4. End your response with: "SPEECH_DONE"
 
-Do NOT analyse the transcript. Just transcribe.""",
+Do NOT analyse the content. Just extract the text.""",
             model_client=self.model,
-            tools=[transcribe_tool],
+            tools=[transcribe_tool, ocr_tool],
         )
 
         # --- Agent 2: Reasoning Agent ---
@@ -247,14 +256,25 @@ Instructions:
     async def reset(self):
         await self.team.reset()
 
-    async def analyze(self, audio_path: Optional[str] = None, transcript: Optional[str] = None):
+    async def analyze(
+        self,
+        audio_path: Optional[str] = None,
+        transcript: Optional[str] = None,
+        image_path: Optional[str] = None,
+    ):
         """
         Run the 4-agent pipeline.
-        Provide either audio_path (file path) or transcript (raw text).
+        Provide audio_path, image_path, or transcript (raw text).
         Returns an async stream of events.
         """
         if audio_path:
             task = f"Analyze this call recording for scams. Audio file path: {audio_path}"
+        elif image_path:
+            task = (
+                f"Analyze this screenshot for scams.\n\n"
+                f"IMAGE FILE PATH: {image_path}\n\n"
+                "Use extract_image_text to extract the text from the image, then analyze it for scam content."
+            )
         elif transcript:
             task = (
                 f"Analyze this call transcript for scams.\n\n"
@@ -262,6 +282,6 @@ Instructions:
                 "Note: No audio file — skip transcription, the transcript is already provided."
             )
         else:
-            raise ValueError("Provide either audio_path or transcript")
+            raise ValueError("Provide audio_path, image_path, or transcript")
 
         return self.team.run_stream(task=task)
