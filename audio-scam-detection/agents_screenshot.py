@@ -15,7 +15,7 @@ import yaml
 
 from tools import ImageOCR, URLChecker, DatabaseConnector
 
-class GuardianAngelTeam:
+class ScreenshotTeam:
     """
     Guardian Angel Team tasked with Scam Protection using an Agentic Workflow
     """

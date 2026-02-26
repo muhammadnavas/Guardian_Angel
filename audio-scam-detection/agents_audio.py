@@ -32,7 +32,6 @@ _transcriber: Optional[SpeechTranscriber] = None
 _detector = ScamDetector()
 _alert = AlertSystem()
 _db = DatabaseConnector()
-_ocr = ImageOCR()
 
 
 def _get_transcriber() -> SpeechTranscriber:
