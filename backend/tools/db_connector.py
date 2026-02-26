@@ -1,94 +1,135 @@
-import hashlib
-import pandas as pd
-import sqlite3
+"""
+MongoDB DatabaseConnector
 
+Stores call analysis results in a MongoDB collection.
+Set MONGO_URI in .env (defaults to a local instance).
+
+Collection schema (one document per call):
+    transcript         str   - full call transcript
+    summary            str   - agent-generated summary
+    threat_level       str   - SAFE / SUSPICIOUS / HIGH_RISK / CRITICAL
+    threat_score       int   - 0-100
+    caller_type        str   - optional, e.g. "scammer", "unknown"
+    language           str   - detected language code
+    fear_indicators    list  - matched fear keywords
+    authority_indicators list
+    urgency_indicators  list
+    financial_indicators list
+    alert_sent         bool  - whether family/police were alerted
+    created_at         datetime
+    transcript_hash    str   - SHA-256 for deduplication (unique index)
+"""
+
+import hashlib
+import os
+from datetime import datetime, timezone
 from typing import Optional
-from datetime import datetime
+
+from pymongo import MongoClient, DESCENDING
+from pymongo.errors import DuplicateKeyError
+from dotenv import load_dotenv, find_dotenv
+
+load_dotenv(find_dotenv(), override=True)
+
 
 class DatabaseConnector:
-    """Manages database operations for storing analysis results."""
+    """Manages MongoDB operations for storing call analysis results."""
 
-    def __init__(self, db_path: str = "sqlite3/results.financial.db"):
-        """Initialize database connection and create table if it doesn't exist.
+    def __init__(
+        self,
+        uri: Optional[str] = None,
+        db_name: str = "guardian_angel",
+        collection_name: str = "call_results",
+    ):
+        """Connect to MongoDB and ensure the unique index exists.
+
+        Args:
+            uri: MongoDB connection URI. Falls back to MONGO_URI env var,
+                 then to 'mongodb://localhost:27017'.
+            db_name: Database name.
+            collection_name: Collection name.
         """
-        self.db_path = db_path
-        self._create_table()
+        resolved_uri = uri or os.getenv("MONGO_URI", "mongodb://localhost:27017")
+        self._client = MongoClient(resolved_uri, serverSelectionTimeoutMS=5000)
+        self._col = self._client[db_name][collection_name]
 
-    def _create_table(self) -> None:
-        query = """
-        CREATE TABLE IF NOT EXISTS results (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            text TEXT NOT NULL,
-            summary TEXT,
-            is_scam BOOLEAN NOT NULL,
-            confidence_level INTEGER,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            message_hash TEXT UNIQUE NOT NULL
-        )
-        """
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(query)
+        # Unique index prevents duplicate transcripts
+        self._col.create_index("transcript_hash", unique=True)
 
-    def _compute_hash(self, text: str) -> str:
-        """Compute SHA-256 hash of the input text."""
-        return hashlib.sha256(text.encode('utf-8')).hexdigest()
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def store_result(
         self,
-        text: str,
+        transcript: str,
         summary: Optional[str],
-        is_scam: bool,
-        confidence_level: int
-    ) -> Optional[int]:  # Updated return type hint
-        """Store analysis result in the database.
-        """
-        message_hash = self._compute_hash(text)
-        hash_query = "SELECT id FROM results WHERE message_hash = ?"
+        threat_level: str,
+        threat_score: int,
+        caller_type: Optional[str] = None,
+        language: Optional[str] = None,
+        fear_indicators: Optional[list] = None,
+        authority_indicators: Optional[list] = None,
+        urgency_indicators: Optional[list] = None,
+        financial_indicators: Optional[list] = None,
+        alert_sent: bool = False,
+    ) -> Optional[str]:
+        """Insert a call analysis document.
 
-        query = """
-        INSERT INTO results (text, summary, is_scam, confidence_level, message_hash)
-        VALUES (?, ?, ?, ?, ?)
-        """
-        
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute(hash_query, (message_hash,))
-            existing_id = cursor.fetchone()
-            
-            if existing_id:
-                return None
-            
-            cursor = conn.execute(
-                query,
-                (text, summary, is_scam, confidence_level, message_hash)
-            )
-            return cursor.lastrowid
+        Deduplicates by transcript hash — returns None if already stored.
 
-    def get_result(self, result_id: int) -> Optional[dict]:
-        """Retrieve a specific analysis result by ID.
+        Returns:
+            The inserted document's _id as a string, or None if duplicate.
         """
-        query = "SELECT * FROM results WHERE id = ?"
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute(query, (result_id,))
-            result = cursor.fetchone()
-            
-            if result:
-                return dict(result)
+        doc = {
+            "transcript": transcript,
+            "summary": summary,
+            "threat_level": threat_level,
+            "threat_score": threat_score,
+            "caller_type": caller_type,
+            "language": language,
+            "fear_indicators": fear_indicators or [],
+            "authority_indicators": authority_indicators or [],
+            "urgency_indicators": urgency_indicators or [],
+            "financial_indicators": financial_indicators or [],
+            "alert_sent": alert_sent,
+            "created_at": datetime.now(timezone.utc),
+            "transcript_hash": self._hash(transcript),
+        }
+        try:
+            result = self._col.insert_one(doc)
+            return str(result.inserted_id)
+        except DuplicateKeyError:
             return None
 
-    def get_top_k(self, k: int = 10) -> pd.DataFrame:
-        """Retrieve most recent analysis results as a DataFrame.
-        """
-        query = "SELECT * FROM results ORDER BY created_at DESC LIMIT ?"
-        with sqlite3.connect(self.db_path) as conn:
-            df = pd.read_sql_query(query, conn, params=(k,))
-            return df
+    def get_result(self, doc_id: str) -> Optional[dict]:
+        """Retrieve a single document by its _id string."""
+        from bson import ObjectId
+        doc = self._col.find_one({"_id": ObjectId(doc_id)})
+        if doc:
+            doc["_id"] = str(doc["_id"])
+        return doc
 
-    def get_all(self) -> pd.DataFrame:
-        """Retrieve all analysis results as a DataFrame.
-        """
-        query = "SELECT * FROM results"
-        with sqlite3.connect(self.db_path) as conn:
-            df = pd.read_sql_query(query, conn)
-            return df
-                
+    def get_top_k(self, k: int = 10) -> list[dict]:
+        """Return the k most recent call analysis documents."""
+        docs = list(
+            self._col.find({}, {"_id": 0, "transcript_hash": 0})
+            .sort("created_at", DESCENDING)
+            .limit(k)
+        )
+        return docs
+
+    def get_all(self) -> list[dict]:
+        """Return all documents sorted by recency."""
+        return list(
+            self._col.find({}, {"_id": 0, "transcript_hash": 0})
+            .sort("created_at", DESCENDING)
+        )
+
+    # ------------------------------------------------------------------
+    # Private
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _hash(text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
